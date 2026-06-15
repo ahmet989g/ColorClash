@@ -2,13 +2,19 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// Gelişmiş yapay zeka fırça kontrolcüsü.
+/// Gelişmiş yapay zeka fırça kontrolcüsü — v2 (akıcı hareket).
 ///
-/// Easy       — Çoğunlukla rastgele hareket, nadiren strateji
-/// Medium     — Boyasız alana gitmeye çalışır, orta tepki süresi
-/// Hard       — Agresif boyama, rakip boya alanına girer, hızlı tepki
-/// Superhuman — Gerçek zamanlı skor takibi, birinci sıradaki rakibi
-///              hedefler ve o bölgeyi kendi rengiyle boyar
+/// v1'e göre değişiklikler:
+/// - Dönüş artık -1/0/1 değil, -1..1 arası SÜREKLİ değer (analog steering)
+/// - Dönüş komutu yumuşatılarak uygulanır → ani kırılmalar yok
+/// - Perlin gürültüsü ile organik sapma → robotik düz çizgiler yok
+/// - Öngörülü duvar kaçınma → fırça duvara sürtünmez
+/// - Pencere bazlı sıkışma tespiti + kaçış modu → kilitlenme yok
+///
+/// Easy       — Çok gürültülü, yavaş karar, kısa görüş
+/// Medium     — Boyasız alana yönelir, orta tepki
+/// Hard       — Agresif, rakip boyasına girer, hızlı tepki
+/// Superhuman — Skor takibi yapar, lideri hedefler, neredeyse sıfır gürültü
 /// </summary>
 [RequireComponent(typeof(BrushController))]
 public class BrushAI : MonoBehaviour
@@ -18,23 +24,48 @@ public class BrushAI : MonoBehaviour
   [Header("Yapay Zeka Ayarları")]
   [SerializeField] private Difficulty difficulty = Difficulty.Medium;
 
+  [Header("Hareket Yumuşatma")]
+  [Tooltip("Dönüş komutunun saniyede ne kadar değişebileceği. Düşük = yumuşak, yüksek = keskin.")]
+  [SerializeField] private float steerResponse = 5f;
+
+  [Header("Duvar Kaçınma")]
+  [Tooltip("Fırçanın kaç saniye ilerisini kontrol edeceği (hızla çarpılır).")]
+  [SerializeField] private float wallLookAheadTime = 0.6f;
+
+  [Header("Sıkışma Tespiti")]
+  [Tooltip("Mesafe ölçüm penceresi (saniye).")]
+  [SerializeField] private float stuckCheckWindow = 0.5f;
+  [Tooltip("Beklenen mesafenin bu oranından az gidildiyse sıkışmış sayılır.")]
+  [SerializeField, Range(0.1f, 0.9f)] private float stuckThreshold = 0.35f;
+  [Tooltip("Kaçış modunun süresi (saniye).")]
+  [SerializeField] private float escapeDuration = 0.6f;
+
   private BrushController brushController;
+
+  // ── Yönlendirme (sürekli değerler, -1..1) ──────────────────
+  private float steerTarget;    // Karar mekanizmasının istediği dönüş
+  private float steerCurrent;   // Yumuşatılmış, fiilen uygulanan dönüş
+  private float noiseSeed;      // Her fırçanın kendi Perlin tohumu
+
+  // ── Karar zamanlayıcısı ────────────────────────────────────
   private float decisionTimer;
-  private float currentTurnDirection = 0f;
 
-  // Sıkışma tespiti
+  // ── Sıkışma tespiti (pencere bazlı) ────────────────────────
+  private float windowTimer;
+  private float windowDistance;
   private Vector3 lastPosition;
-  private float stuckTimer;
+  private float escapeTimer;      // > 0 ise kaçış modunda
+  private float escapeDirection;  // Kaçış sırasında dönülecek yön
 
-  // Hedef pozisyon (Superhuman için)
-  private Vector2 targetPosition;
-  private bool hasTarget = false;
+  // ── Zorluk bazlı ayarlar (Easy, Medium, Hard, Superhuman) ──
+  private readonly float[] decisionIntervals = { 0.80f, 0.45f, 0.25f, 0.12f }; // Karar sıklığı (sn)
+  private readonly float[] strategyChance = { 0.25f, 0.55f, 0.85f, 1.00f }; // Strateji kullanma olasılığı
+  private readonly float[] wanderNoise = { 0.45f, 0.28f, 0.15f, 0.05f }; // Organik sapma miktarı
+  private readonly float[] lookDistances = { 1.0f, 1.6f, 2.2f, 3.0f };     // Boyasız alan görüş mesafesi
 
-  // Her zorluk için karar aralığı (saniye)
-  private readonly float[] decisionIntervals = { 1.0f, 0.5f, 0.2f, 0.08f };
-
-  // Strateji kullanma olasılığı (0-1)
-  private readonly float[] strategyChance = { 0.15f, 0.5f, 0.85f, 1.0f };
+  // Boyasız alan taramasında kullanılan açılar.
+  // Öne yakın açılar önce kontrol edilir → gereksiz sert dönüş yapılmaz.
+  private static readonly float[] ScanAngles = { 0f, 25f, -25f, 55f, -55f };
 
   private void Awake()
   {
@@ -44,7 +75,11 @@ public class BrushAI : MonoBehaviour
   private void Start()
   {
     lastPosition = transform.position;
-    // Aynı anda karar vermesinler
+
+    // Her fırça farklı Perlin örüntüsü kullansın
+    noiseSeed = Random.Range(0f, 1000f);
+
+    // Aynı anda karar vermesinler — başlangıçta küçük faz farkı
     decisionTimer = Random.Range(0f, GetInterval());
   }
 
@@ -52,17 +87,152 @@ public class BrushAI : MonoBehaviour
   {
     if (GameManager.Instance?.CurrentState != GameManager.GameState.Playing) return;
 
-    DetectStuck();
-    decisionTimer += Time.deltaTime;
+    float dt = Time.deltaTime;
 
-    if (decisionTimer >= GetInterval())
+    UpdateStuckWindow(dt);
+
+    if (escapeTimer > 0f)
     {
-      decisionTimer = 0f;
-      MakeDecision();
+      // 1) KAÇIŞ MODU — her şeyi ezer, sabit yönde tam güçle dön
+      escapeTimer -= dt;
+      steerTarget = escapeDirection;
+    }
+    else if (AvoidWalls())
+    {
+      // 2) DUVAR KAÇINMA — kararlardan önceliklidir
+      // steerTarget AvoidWalls içinde ayarlandı, karar verme atlanır.
+      // Karar zamanlayıcısını sıfırlamıyoruz; duvardan çıkınca normal akış devam eder.
+    }
+    else
+    {
+      // 3) NORMAL KARAR AKIŞI
+      decisionTimer += dt;
+      if (decisionTimer >= GetInterval())
+      {
+        decisionTimer = 0f;
+        MakeDecision();
+      }
     }
 
-    ApplyTurn();
+    ApplySteering(dt);
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  YÖNLENDİRME KATMANI
+  // ═══════════════════════════════════════════════════════════
+
+  /// <summary>
+  /// Hedef dönüş değerine yumuşak geçiş yapar ve uygular.
+  /// Perlin gürültüsü ile organik sapma ekler.
+  /// </summary>
+  private void ApplySteering(float dt)
+  {
+    // Perlin -1..1 aralığına çekilir; zorluk düştükçe gürültü artar.
+    // Kaçış modunda gürültü kapatılır — net manevra gerekir.
+    float noise = 0f;
+    if (escapeTimer <= 0f)
+    {
+      noise = (Mathf.PerlinNoise(noiseSeed, Time.time * 0.5f) * 2f - 1f)
+              * wanderNoise[(int)difficulty];
+    }
+
+    float desired = Mathf.Clamp(steerTarget + noise, -1f, 1f);
+
+    // Ani yön değişimi yerine yumuşak geçiş — robotik kırılmaları önler
+    steerCurrent = Mathf.MoveTowards(steerCurrent, desired, steerResponse * dt);
+
+    if (Mathf.Abs(steerCurrent) > 0.01f)
+      brushController.TurnAI(steerCurrent);
+  }
+
+  /// <summary>
+  /// Hedefe ORANTILI döner: hedef öndeyse az, yandaysa sert dönüş.
+  /// Eski cross-product eşiği hedef etrafında titreşime sebep oluyordu.
+  /// </summary>
+  private void SteerToward(Vector2 targetPos, float strength = 1f)
+  {
+    Vector2 dir = (targetPos - (Vector2)transform.position).normalized;
+
+    // SignedAngle: pozitif = saat yönünün tersi (sol) = TurnAI(+1) ile aynı yön
+    float angle = Vector2.SignedAngle(transform.up, dir);
+
+    // 45° içinde orantılı, dışında tam dönüş
+    steerTarget = Mathf.Clamp(angle / 45f * strength, -1f, 1f);
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  DUVAR KAÇINMA
+  // ═══════════════════════════════════════════════════════════
+
+  /// <summary>
+  /// Fırçanın hızına göre ilerisini kontrol eder.
+  /// Sınır dışına çıkacaksa arena merkezine doğru döner.
+  /// </summary>
+  /// <returns>Duvar tehlikesi var mı?</returns>
+  private bool AvoidWalls()
+  {
+    float lookAhead = brushController.GetMoveSpeed() * wallLookAheadTime;
+    Vector2 ahead = (Vector2)transform.position + (Vector2)transform.up * lookAhead;
+
+    // x = minX, y = maxX, z = minY, w = maxY
+    Vector4 b = brushController.GetBounds();
+
+    bool danger = ahead.x < b.x || ahead.x > b.y ||
+                  ahead.y < b.z || ahead.y > b.w;
+
+    if (!danger) return false;
+
+    // Merkeze dönmek köşe tuzaklarını da çözer
+    Vector2 center = new Vector2((b.x + b.y) * 0.5f, (b.z + b.w) * 0.5f);
+    SteerToward(center, 1.4f);
+    return true;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  SIKIŞMA TESPİTİ
+  // ═══════════════════════════════════════════════════════════
+
+  /// <summary>
+  /// Pencere bazlı tespit: son X saniyede kat edilen mesafe,
+  /// beklenenin altındaysa fırça sıkışmış demektir.
+  /// Duvar sürtünmesini ve fırça-fırça kilitlenmesini de yakalar
+  /// (anlık pozisyon farkı bunları kaçırıyordu).
+  /// </summary>
+  private void UpdateStuckWindow(float dt)
+  {
+    windowDistance += Vector3.Distance(transform.position, lastPosition);
+    lastPosition = transform.position;
+    windowTimer += dt;
+
+    if (windowTimer < stuckCheckWindow) return;
+
+    float expected = brushController.GetMoveSpeed() * stuckCheckWindow;
+    if (windowDistance < expected * stuckThreshold)
+      StartEscape();
+
+    windowTimer = 0f;
+    windowDistance = 0f;
+  }
+
+  /// <summary>
+  /// Kaçış modunu başlatır: arena merkezi hangi taraftaysa
+  /// o yöne tam güçle dönerek açık alana çıkar.
+  /// </summary>
+  private void StartEscape()
+  {
+    Vector4 b = brushController.GetBounds();
+    Vector2 center = new Vector2((b.x + b.y) * 0.5f, (b.z + b.w) * 0.5f);
+
+    Vector2 dir = (center - (Vector2)transform.position).normalized;
+    float angle = Vector2.SignedAngle(transform.up, dir);
+
+    escapeDirection = angle >= 0f ? 1f : -1f;
+    escapeTimer = escapeDuration;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  KARAR MEKANİZMASI (zorluk seviyeleri)
+  // ═══════════════════════════════════════════════════════════
 
   private void MakeDecision()
   {
@@ -75,46 +245,36 @@ public class BrushAI : MonoBehaviour
     }
   }
 
-  // ─── KOLAY ────────────────────────────────────────────────
-  /// <summary>
-  /// Çoğunlukla rastgele hareket eder.
-  /// Nadiren önündeki alana bakar.
-  /// </summary>
+  /// <summary>Çoğunlukla rastgele gezinir, nadiren strateji kullanır.</summary>
   private void DecideEasy()
   {
     if (Random.value < strategyChance[(int)difficulty])
-      TurnTowardUnpainted(0.8f); // Kısa menzil
+      TurnTowardUnpainted(lookDistances[(int)difficulty]);
     else
-      RandomTurn(0.6f); // Sık düz gitme
+      RandomTurn(0.6f);
   }
 
-  // ─── ORTA ─────────────────────────────────────────────────
-  /// <summary>
-  /// Boyasız alana gitmeye çalışır.
-  /// Önünde boyalı alan varsa alternatif yön arar.
-  /// </summary>
+  /// <summary>Boyasız alana yönelmeye çalışır.</summary>
   private void DecideMedium()
   {
     if (Random.value < strategyChance[(int)difficulty])
-      TurnTowardUnpainted(1.5f);
+    {
+      if (!TurnTowardUnpainted(lookDistances[(int)difficulty]))
+        RandomTurn(0.4f); // Bulamazsa boş boş düz gitmesin
+    }
     else
+    {
       RandomTurn(0.4f);
+    }
   }
 
-  // ─── ZOR ──────────────────────────────────────────────────
-  /// <summary>
-  /// Agresif strateji. Boyasız alana gider,
-  /// sıkışırsa rakip boya alanına girerek üstüne yazar.
-  /// </summary>
+  /// <summary>Agresif: boyasız alan yoksa rakip boyasının üstüne yazar.</summary>
   private void DecideHard()
   {
     if (Random.value < strategyChance[(int)difficulty])
     {
-      // Önce boyasız alan ara
-      bool found = TurnTowardUnpainted(2.0f);
-
-      // Bulamazsa rakip boyasına gir
-      if (!found) TurnTowardRivalPaint();
+      if (!TurnTowardUnpainted(lookDistances[(int)difficulty]))
+        TurnTowardRivalPaint();
     }
     else
     {
@@ -122,12 +282,9 @@ public class BrushAI : MonoBehaviour
     }
   }
 
-  // ─── İNSAN ÜSTÜ ───────────────────────────────────────────
   /// <summary>
-  /// Gerçek zamanlı skor takibi yapar.
-  /// En yüksek yüzdeye sahip rakibin boya bölgesini hedefler
-  /// ve o bölgeyi kendi rengiyle boyar. Yüzde farkı az ise
-  /// en büyük boyasız alana gider.
+  /// Skor takibi yapar: lider belirgin öndeyse onun bölgesini hedefler,
+  /// fark azsa boyasız alana yönelir.
   /// </summary>
   private void DecideSuperhuman()
   {
@@ -143,11 +300,10 @@ public class BrushAI : MonoBehaviour
     if (myIndex < 0 || myIndex >= scores.Length) return;
 
     float myScore = scores[myIndex];
-
     int leaderIndex = -1;
     float leaderScore = -1f;
 
-    for (int i = 0; i < scores.Length; i++)
+    for (int i = 0; i < scores.Length && i < brushes.Count; i++)
     {
       if (i == myIndex) continue;
       if (scores[i] > leaderScore) { leaderScore = scores[i]; leaderIndex = i; }
@@ -156,39 +312,40 @@ public class BrushAI : MonoBehaviour
     if (leaderIndex < 0) return;
 
     if (leaderScore - myScore > 0.05f)
-      TurnTowardPosition(brushes[leaderIndex].transform.position);
-    else
-      TurnTowardUnpainted(3.0f);
+      SteerToward(brushes[leaderIndex].transform.position);
+    else if (!TurnTowardUnpainted(lookDistances[(int)difficulty]))
+      SteerToward(brushes[leaderIndex].transform.position); // Boş alan kalmadıysa lideri ez
   }
 
-  // ─── YARDIMCI METODLAR ────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════
+  //  YARDIMCI METODLAR
+  // ═══════════════════════════════════════════════════════════
 
   /// <summary>
-  /// Önde, solda, sağda boyasız alan tarar ve o yöne döner.
+  /// 5 açıda boyasız alan tarar (0°, ±25°, ±55°).
+  /// Öne yakın açılar öncelikli — fırça gereksiz sert dönüş yapmaz.
+  /// Bulunan açıya ORANTILI döner.
   /// </summary>
   /// <returns>Boyasız alan bulundu mu?</returns>
   private bool TurnTowardUnpainted(float lookDistance)
   {
-    Vector2 fwd = transform.up;
-    Vector2 left = Quaternion.Euler(0, 0, 60f) * fwd;
-    Vector2 right = Quaternion.Euler(0, 0, -60f) * fwd;
+    foreach (float angle in ScanAngles)
+    {
+      Vector2 dir = Quaternion.Euler(0f, 0f, angle) * transform.up;
+      Vector2 samplePos = (Vector2)transform.position + dir * lookDistance;
 
-    bool fwdFree = CheckUnpainted((Vector2)transform.position + fwd * lookDistance);
-    bool leftFree = CheckUnpainted((Vector2)transform.position + left * lookDistance);
-    bool rightFree = CheckUnpainted((Vector2)transform.position + right * lookDistance);
-
-    if (fwdFree) { currentTurnDirection = 0f; return true; }
-    if (leftFree && !rightFree) { currentTurnDirection = 1f; return true; }
-    if (rightFree && !leftFree) { currentTurnDirection = -1f; return true; }
-    if (leftFree && rightFree) { currentTurnDirection = Random.value > 0.5f ? 1f : -1f; return true; }
+      if (CheckUnpainted(samplePos))
+      {
+        // Açı küçükse az, büyükse çok dön
+        steerTarget = Mathf.Clamp(angle / 45f, -1f, 1f);
+        return true;
+      }
+    }
 
     return false;
   }
 
-  /// <summary>
-  /// En yakın rakip boya alanına doğru döner.
-  /// Hard modu için — rakip boyasının üstüne yaz.
-  /// </summary>
+  /// <summary>En yakın rakibin pozisyonuna döner (boyasının üstüne yazmak için).</summary>
   private void TurnTowardRivalPaint()
   {
     List<BrushController> brushes = GameManager.Instance.GetBrushes();
@@ -205,27 +362,10 @@ public class BrushAI : MonoBehaviour
     }
 
     if (nearest != null)
-      TurnTowardPosition(nearest.transform.position);
+      SteerToward(nearest.transform.position);
   }
 
-  /// <summary>
-  /// Belirli bir dünya pozisyonuna doğru döner.
-  /// </summary>
-  private void TurnTowardPosition(Vector2 targetPos)
-  {
-    Vector2 dirToTarget = (targetPos - (Vector2)transform.position).normalized;
-    Vector2 myForward = transform.up;
-
-    float cross = myForward.x * dirToTarget.y - myForward.y * dirToTarget.x;
-
-    if (cross > 0.1f) currentTurnDirection = 1f;
-    else if (cross < -0.1f) currentTurnDirection = -1f;
-    else currentTurnDirection = 0f;
-  }
-
-  /// <summary>
-  /// Belirli bir pozisyonun boyasız olup olmadığını kontrol eder.
-  /// </summary>
+  /// <summary>Verilen pozisyonun boyasız olup olmadığını kontrol eder.</summary>
   private bool CheckUnpainted(Vector2 worldPos)
   {
     return PaintManager.Instance != null &&
@@ -233,49 +373,19 @@ public class BrushAI : MonoBehaviour
   }
 
   /// <summary>
-  /// Rastgele dönüş yapar. straightChance ile düz gitme olasılığı ayarlanır.
+  /// Rastgele SÜREKLİ dönüş değeri seçer (eski -1/0/1 yerine).
+  /// straightChance ile düz gitme olasılığı ayarlanır.
   /// </summary>
   private void RandomTurn(float straightChance)
   {
-    float roll = Random.value;
-    if (roll < straightChance) currentTurnDirection = 0f;
-    else if (roll < straightChance + 0.35f) currentTurnDirection = 1f;
-    else currentTurnDirection = -1f;
-  }
-
-  /// <summary>
-  /// Belirli bir süre hareketsiz kalırsa zorla yön değiştirir.
-  /// </summary>
-  private void DetectStuck()
-  {
-    if (Vector3.Distance(transform.position, lastPosition) < 0.01f)
-    {
-      stuckTimer += Time.deltaTime;
-      if (stuckTimer > 0.4f)
-      {
-        currentTurnDirection = Random.value > 0.5f ? 1f : -1f;
-        stuckTimer = 0f;
-      }
-    }
+    if (Random.value < straightChance)
+      steerTarget = 0f;
     else
-    {
-      stuckTimer = 0f;
-    }
-
-    lastPosition = transform.position;
-  }
-
-  private void ApplyTurn()
-  {
-    if (Mathf.Abs(currentTurnDirection) > 0.01f)
-      brushController.TurnAI(currentTurnDirection);
+      steerTarget = Random.Range(0.3f, 1f) * (Random.value > 0.5f ? 1f : -1f);
   }
 
   private float GetInterval() => decisionIntervals[(int)difficulty];
 
   public Difficulty GetDifficulty() => difficulty;
-  public void SetDifficulty(Difficulty d)
-  {
-    difficulty = d;
-  }
+  public void SetDifficulty(Difficulty d) => difficulty = d;
 }

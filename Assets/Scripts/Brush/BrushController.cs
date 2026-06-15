@@ -124,4 +124,10 @@ public class BrushController : MonoBehaviour
   {
     Rotate(direction);
   }
+
+  /// <summary>
+  /// AI'ın duvar kaçınması için arena sınırlarını döndürür.
+  /// x = minX, y = maxX, z = minY, w = maxY
+  /// </summary>
+  public Vector4 GetBounds() => new Vector4(minX, maxX, minY, maxY);
 }
