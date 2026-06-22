@@ -241,4 +241,116 @@ public class PaintManager : MonoBehaviour
   /// Cache'lenmiş skorları döndürür. BrushAI Superhuman için.
   /// </summary>
   public float[] GetCachedScores() => cachedScores;
+
+  /// <summary>
+  /// Verilen pozisyonun belirtilen renkle boyalı olup olmadığını döndürür.
+  /// Superhuman AI'ın "liderin boyasını" bulması için kullanılır.
+  /// IsPositionUnpainted'in tersi mantık + renk eşleştirme.
+  /// </summary>
+  /// <param name="worldPos">Kontrol edilecek dünya pozisyonu</param>
+  /// <param name="targetColor">Aranan renk (örn. liderin rengi)</param>
+  /// <returns>O piksel hedef renkle boyalıysa true</returns>
+  public bool IsPositionPaintedWith(Vector2 worldPos, Color targetColor)
+  {
+    Vector2Int p = WorldToPixel(worldPos);
+    int index = p.y * textureWidth + p.x;
+
+    if (index < 0 || index >= pixels.Length) return false;
+
+    Color32 pixel = pixels[index];
+    if (pixel.a < 10) return false; // Boyasız
+
+    // Renk toleranslı karşılaştırma (boyamadaki anti-alias için)
+    Color32 target32 = targetColor;
+    int diff = Mathf.Abs(pixel.r - target32.r)
+             + Mathf.Abs(pixel.g - target32.g)
+             + Mathf.Abs(pixel.b - target32.b);
+
+    return diff < 30; // CalculateColorPercentage ile aynı tolerans
+  }
+
+  /// <summary>
+  /// Verilen pozisyona en yakın, hedef renkle boyalı dünya noktasını bulur.
+  /// Tüm texture'ı taramak yerine, merkezden dışa doğru genişleyen
+  /// halkalar halinde örnekleme yapar (spiral arama) — performanslı.
+  ///
+  /// Superhuman AI bunu kullanarak liderin boyadığı en yakın bölgeyi
+  /// hedefler ve üstüne kendi rengiyle yazar.
+  /// </summary>
+  /// <param name="fromWorldPos">Arama merkezi (genelde AI'ın konumu)</param>
+  /// <param name="targetColor">Aranan boya rengi (liderin rengi)</param>
+  /// <param name="maxSearchRadius">Maksimum arama yarıçapı (dünya birimi)</param>
+  /// <param name="hitPos">Bulunan nokta (out)</param>
+  /// <returns>Hedef renkle boyalı bir nokta bulunduysa true</returns>
+  public bool TryFindNearestPaintedPosition(
+      Vector2 fromWorldPos,
+      Color targetColor,
+      float maxSearchRadius,
+      out Vector2 hitPos)
+  {
+    hitPos = fromWorldPos;
+
+    Color32 target32 = targetColor;
+
+    // Dünya birimini piksele çevirmek için ölçek
+    Camera cam = Camera.main;
+    float worldWidth = cam.orthographicSize * 2f * cam.aspect;
+    float pixelsPerWorldUnit = textureWidth / worldWidth;
+
+    int maxRadiusPx = Mathf.RoundToInt(maxSearchRadius * pixelsPerWorldUnit);
+    Vector2Int center = WorldToPixel(fromWorldPos);
+
+    // Merkezden dışa doğru halka halka tara.
+    // Adım > 1 → her pikseli değil, seyrek örnekle (performans).
+    const int ringStep = 4;   // Halkalar arası piksel atlaması
+    const int angleStep = 12; // Halka üzerinde derece atlaması
+
+    for (int r = ringStep; r <= maxRadiusPx; r += ringStep)
+    {
+      for (int deg = 0; deg < 360; deg += angleStep)
+      {
+        float rad = deg * Mathf.Deg2Rad;
+        int px = center.x + Mathf.RoundToInt(Mathf.Cos(rad) * r);
+        int py = center.y + Mathf.RoundToInt(Mathf.Sin(rad) * r);
+
+        if (px < 0 || px >= textureWidth) continue;
+        if (py < 0 || py >= textureHeight) continue;
+
+        Color32 pixel = pixels[py * textureWidth + px];
+        if (pixel.a < 10) continue; // Boyasız
+
+        int diff = Mathf.Abs(pixel.r - target32.r)
+                 + Mathf.Abs(pixel.g - target32.g)
+                 + Mathf.Abs(pixel.b - target32.b);
+
+        if (diff < 30)
+        {
+          // Pikseli dünya pozisyonuna geri çevir
+          hitPos = PixelToWorld(px, py);
+          return true; // En yakın halkadaki ilk eşleşme yeterli
+        }
+      }
+    }
+
+    return false; // Arama yarıçapında liderin boyası yok
+  }
+
+  /// <summary>
+  /// Piksel koordinatını dünya pozisyonuna çevirir.
+  /// WorldToPixel'in tersi.
+  /// </summary>
+  private Vector2 PixelToWorld(int px, int py)
+  {
+    Camera cam = Camera.main;
+    float halfHeight = cam.orthographicSize;
+    float halfWidth = halfHeight * cam.aspect;
+
+    float normalizedX = (float)px / textureWidth;
+    float normalizedY = (float)py / textureHeight;
+
+    float worldX = cam.transform.position.x - halfWidth + normalizedX * (halfWidth * 2f);
+    float worldY = cam.transform.position.y - halfHeight + normalizedY * (halfHeight * 2f);
+
+    return new Vector2(worldX, worldY);
+  }
 }

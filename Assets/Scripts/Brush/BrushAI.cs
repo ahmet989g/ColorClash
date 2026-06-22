@@ -288,18 +288,20 @@ public class BrushAI : MonoBehaviour
   /// </summary>
   private void DecideSuperhuman()
   {
-    if (GameManager.Instance == null) return;
+    if (GameManager.Instance == null || PaintManager.Instance == null) return;
 
     var brushes = GameManager.Instance.GetBrushes();
 
     // Cache'den oku — 2 saniyede bir güncellenir, her frame hesaplanmaz
-    float[] scores = PaintManager.Instance?.GetCachedScores();
+    float[] scores = PaintManager.Instance.GetCachedScores();
     if (scores == null) return;
 
     int myIndex = brushes.IndexOf(brushController);
     if (myIndex < 0 || myIndex >= scores.Length) return;
 
     float myScore = scores[myIndex];
+
+    // En yüksek skorlu rakibi (lideri) bul
     int leaderIndex = -1;
     float leaderScore = -1f;
 
@@ -311,10 +313,46 @@ public class BrushAI : MonoBehaviour
 
     if (leaderIndex < 0) return;
 
-    if (leaderScore - myScore > 0.05f)
-      SteerToward(brushes[leaderIndex].transform.position);
-    else if (!TurnTowardUnpainted(lookDistances[(int)difficulty]))
-      SteerToward(brushes[leaderIndex].transform.position); // Boş alan kalmadıysa lideri ez
+    Color leaderColor = brushes[leaderIndex].GetBrushColor();
+    bool leaderClearlyAhead = (leaderScore - myScore) > 0.05f;
+
+    if (leaderClearlyAhead)
+    {
+      // Lider önde → boyasını ez. Bulamazsan boş alana git.
+      if (!TurnTowardEnemyPaint(leaderColor))
+        TurnTowardUnpainted(lookDistances[(int)difficulty]);
+    }
+    else
+    {
+      // Fark az → önce verimli puan (boş alan), yoksa liderin boyasını ez
+      if (!TurnTowardUnpainted(lookDistances[(int)difficulty]))
+        TurnTowardEnemyPaint(leaderColor);
+    }
+  }
+
+  /// <summary>
+  /// Belirtilen renkle (genelde liderin rengiyle) boyalı, en yakın
+  /// alanı bulur ve oraya doğru orantılı döner. Üstüne kendi rengiyle
+  /// yazarak rakibin yüzdesini düşürmek için kullanılır.
+  ///
+  /// Lideri DEĞİL, liderin boyadığı PİKSEL alanını hedefler.
+  /// </summary>
+  /// <param name="enemyColor">Hedeflenecek rakip boyasının rengi</param>
+  /// <returns>Hedef renkle boyalı alan bulunup yönelinebildiyse true</returns>
+  private bool TurnTowardEnemyPaint(Color enemyColor)
+  {
+    // Görüş mesafesinin birkaç katı kadar geniş tara — boya alanı
+    // fırçadan uzakta olabilir.
+    float searchRadius = lookDistances[(int)difficulty] * 4f;
+
+    if (PaintManager.Instance.TryFindNearestPaintedPosition(
+            transform.position, enemyColor, searchRadius, out Vector2 hitPos))
+    {
+      SteerToward(hitPos);
+      return true;
+    }
+
+    return false;
   }
 
   // ═══════════════════════════════════════════════════════════
