@@ -78,6 +78,7 @@ public class GameManager : MonoBehaviour
   {
     CurrentState = GameState.Playing;
     RemainingTime = roundDuration;
+    BoostManager.Instance.StartNewRound();
 
     if (PaintManager.Instance != null)
       PaintManager.Instance.ClearCanvas();

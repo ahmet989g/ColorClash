@@ -407,6 +407,7 @@ GameObject:
   - component: {fileID: 343246570}
   - component: {fileID: 343246575}
   - component: {fileID: 343246576}
+  - component: {fileID: 343246578}
   - component: {fileID: 343246577}
   m_Layer: 0
   m_Name: Brush_Player3
@@ -646,6 +647,18 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+--- !u!114 &343246578
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 343246569}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9ea7da5cabfdc0d4f9b3eb38a4837c19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BrushBoostState
 --- !u!1 &390051623
 GameObject:
   m_ObjectHideFlags: 0
@@ -1128,6 +1141,7 @@ GameObject:
   - component: {fileID: 557966958}
   - component: {fileID: 557966959}
   - component: {fileID: 557966960}
+  - component: {fileID: 557966962}
   - component: {fileID: 557966961}
   m_Layer: 0
   m_Name: Brush_Player2
@@ -1367,6 +1381,18 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+--- !u!114 &557966962
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 557966953}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9ea7da5cabfdc0d4f9b3eb38a4837c19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BrushBoostState
 --- !u!1 &561838329
 GameObject:
   m_ObjectHideFlags: 0
@@ -2342,6 +2368,71 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1126824947
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1126824950}
+  - component: {fileID: 1126824949}
+  - component: {fileID: 1126824948}
+  m_Layer: 0
+  m_Name: BoostSystem
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1126824948
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1126824947}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8d850f563015f74dbad7a79d17a0280, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BoostManager
+  scheduler: {fileID: 1126824949}
+  boostPickupPrefab: {fileID: 0}
+--- !u!114 &1126824949
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1126824947}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7b9babba798ec484d9b9b7eb531c4ffa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BoostScheduler
+  spawnTimes:
+  - 45
+  - 30
+  - 15
+  topBarRect: {fileID: 561838330}
+  edgePadding: 1
+--- !u!4 &1126824950
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1126824947}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0.56757, y: -0.32669, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1375051145
 GameObject:
   m_ObjectHideFlags: 0
@@ -2355,6 +2446,7 @@ GameObject:
   - component: {fileID: 1375051149}
   - component: {fileID: 1375051151}
   - component: {fileID: 1375051152}
+  - component: {fileID: 1375051154}
   - component: {fileID: 1375051153}
   m_Layer: 0
   m_Name: Brush_Player1
@@ -2576,6 +2668,18 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+--- !u!114 &1375051154
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1375051145}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9ea7da5cabfdc0d4f9b3eb38a4837c19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BrushBoostState
 --- !u!1 &1399547498
 GameObject:
   m_ObjectHideFlags: 0
@@ -2663,7 +2767,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PaintManager
   paintSurface: {fileID: 995188914}
-  textureHeight: 576
+  topBarRect: {fileID: 561838330}
+  textureBaseHeight: 540
   brushRadius: 16
 --- !u!4 &1477995158
 Transform:
@@ -2966,6 +3071,7 @@ GameObject:
   - component: {fileID: 1753555274}
   - component: {fileID: 1753555279}
   - component: {fileID: 1753555280}
+  - component: {fileID: 1753555282}
   - component: {fileID: 1753555281}
   m_Layer: 0
   m_Name: Brush_Player4
@@ -3205,6 +3311,18 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+--- !u!114 &1753555282
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1753555273}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9ea7da5cabfdc0d4f9b3eb38a4837c19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BrushBoostState
 --- !u!1 &1836091912
 GameObject:
   m_ObjectHideFlags: 0
@@ -3808,6 +3926,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 82993b3b8028a3544bc13c5194d6d65a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ArenaScaler
+  topBarRect: {fileID: 561838330}
 --- !u!1 &2049683070
 GameObject:
   m_ObjectHideFlags: 0
@@ -3915,3 +4034,4 @@ SceneRoots:
   - {fileID: 390051624}
   - {fileID: 878428988}
   - {fileID: 1399547500}
+  - {fileID: 1126824950}
