@@ -14,10 +14,22 @@ public class PaintManager : MonoBehaviour
   [Header("Referanslar")]
   [SerializeField] private SpriteRenderer paintSurface;
 
+  [Tooltip("Üst bar. Boyama alanı bunun altına hizalanır.")]
+  [SerializeField] private RectTransform topBarRect;
+
   [Header("Boyama Ayarları")]
-  [SerializeField] private int textureWidth = 512;
-  [SerializeField] private int textureHeight = 288;
-  [SerializeField] private int brushRadius = 5;
+  [Tooltip("Texture'ın DİKEY çözünürlüğü (sabit). Yatay, ekran oranına göre türetilir.")]
+  [SerializeField] private int textureBaseHeight = 540;
+  [Tooltip("Fırça yarıçapı (piksel).")]
+  [SerializeField] private int brushRadius = 16;
+
+  // Türetilen çözünürlük (Start'ta hesaplanır)
+  private int textureWidth;
+  private int textureHeight;
+
+  // Oynanabilir alan sınırları — bir kez hesaplanıp saklanır.
+  // WorldToPixel/PixelToWorld bunu kullanır (her seferinde ölçüm yok).
+  private Bounds2D playableArea;
 
   // Color32 kullanıyoruz — Color (float×4) yerine byte×4, 4x daha hızlı
   private Texture2D paintTexture;
@@ -70,16 +82,30 @@ public class PaintManager : MonoBehaviour
   /// </summary>
   private void InitializeTexture()
   {
-    paintTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.ARGB32, false);
+    Camera cam = Camera.main;
+
+    // Oynanabilir alanı bir kez hesapla ve sakla.
+    // padding = 0: texture tam alanı kaplasın (fırça zaten içeride durur).
+    playableArea = ArenaBounds.Calculate(cam, topBarRect, 0f);
+
+    // Çözünürlüğü oynanabilir alanın oranına göre türet.
+    // Yükseklik taban değer, genişlik alanın en-boy oranına göre.
+    textureHeight = textureBaseHeight;
+    float areaAspect = playableArea.Width / playableArea.Height;
+    textureWidth = Mathf.RoundToInt(textureHeight * areaAspect);
+
+    // Performans koruması
+    textureWidth = Mathf.Clamp(textureWidth, 256, 2048);
+
+    paintTexture = new Texture2D(textureWidth, textureHeight, TextureFormat.RGBA32, false);
     paintTexture.filterMode = FilterMode.Bilinear;
     paintTexture.wrapMode = TextureWrapMode.Clamp;
 
     pixels = new Color32[textureWidth * textureHeight];
     ClearCanvas();
 
-    Camera cam = Camera.main;
-    float camWidth = cam.orthographicSize * 2f * cam.aspect;
-    float ppu = textureWidth / camWidth;
+    // Sprite'ın PPU'su: texture genişliği / alan genişliği (dünya birimi).
+    float ppu = textureWidth / playableArea.Width;
 
     Sprite paintSprite = Sprite.Create(
         paintTexture,
@@ -89,9 +115,17 @@ public class PaintManager : MonoBehaviour
     );
 
     if (paintSurface != null)
+    {
       paintSurface.sprite = paintSprite;
+      // Boyama yüzeyini oynanabilir alanın merkezine konumla —
+      // ArenaScaler zeminiyle birebir üst üste gelsin.
+      paintSurface.transform.position = new Vector3(
+          playableArea.Center.x, playableArea.Center.y, paintSurface.transform.position.z);
+    }
     else
+    {
       Debug.LogError("PaintManager: PaintSurface atanmadı!");
+    }
   }
 
   /// <summary>
@@ -203,13 +237,11 @@ public class PaintManager : MonoBehaviour
   {
     Color32 target32 = targetColor;
     int matchCount = 0;
-    int totalPainted = 0;
-    byte tolerance = 30; // 0-255 arası
+    byte tolerance = 30;
 
     foreach (Color32 pixel in pixels)
     {
-      if (pixel.a < 10) continue;
-      totalPainted++;
+      if (pixel.a < 10) continue; // Boyasız piksel atla
 
       int diff = Mathf.Abs(pixel.r - target32.r)
                + Mathf.Abs(pixel.g - target32.g)
@@ -218,18 +250,16 @@ public class PaintManager : MonoBehaviour
       if (diff < tolerance) matchCount++;
     }
 
-    if (totalPainted == 0) return 0f;
+    // Toplam alanın yüzdesi (Splatoon mantığı): boş alan da paydada.
+    // Artık ölü bölge olmadığı için tüm pikseller gerçekten boyanabilir.
     return (float)matchCount / pixels.Length;
   }
 
   private Vector2Int WorldToPixel(Vector2 worldPos)
   {
-    Camera cam = Camera.main;
-    float halfHeight = cam.orthographicSize;
-    float halfWidth = halfHeight * cam.aspect;
-
-    float normalizedX = (worldPos.x - cam.transform.position.x + halfWidth) / (halfWidth * 2f);
-    float normalizedY = (worldPos.y - cam.transform.position.y + halfHeight) / (halfHeight * 2f);
+    // Dünya pozisyonunu oynanabilir alan içinde 0..1'e normalize et.
+    float normalizedX = (worldPos.x - playableArea.minX) / playableArea.Width;
+    float normalizedY = (worldPos.y - playableArea.minY) / playableArea.Height;
 
     int px = Mathf.Clamp(Mathf.RoundToInt(normalizedX * textureWidth), 0, textureWidth - 1);
     int py = Mathf.Clamp(Mathf.RoundToInt(normalizedY * textureHeight), 0, textureHeight - 1);
@@ -341,15 +371,11 @@ public class PaintManager : MonoBehaviour
   /// </summary>
   private Vector2 PixelToWorld(int px, int py)
   {
-    Camera cam = Camera.main;
-    float halfHeight = cam.orthographicSize;
-    float halfWidth = halfHeight * cam.aspect;
-
     float normalizedX = (float)px / textureWidth;
     float normalizedY = (float)py / textureHeight;
 
-    float worldX = cam.transform.position.x - halfWidth + normalizedX * (halfWidth * 2f);
-    float worldY = cam.transform.position.y - halfHeight + normalizedY * (halfHeight * 2f);
+    float worldX = playableArea.minX + normalizedX * playableArea.Width;
+    float worldY = playableArea.minY + normalizedY * playableArea.Height;
 
     return new Vector2(worldX, worldY);
   }

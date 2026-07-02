@@ -19,11 +19,24 @@ public class BrushController : MonoBehaviour
   [Header("Sınır Ayarı")]
   [SerializeField] private float borderPadding = 0.2f; // Sınırdan ne kadar içeride dursun
 
+  [Tooltip("Üstteki bar'ın RectTransform'u. Fırçanın üst sınırı bunun dünyadaki alt kenarına göre hesaplanır. Boş bırakılırsa üst sınır ekranın tepesi olur.")]
+  [SerializeField] private RectTransform topBarRect;
+
   // Dinamik hesaplanan sınırlar
   private float minX, maxX, minY, maxY;
 
   // Hız çarpanı
   private float speedMultiplier = 1f;
+
+  // Çarpışma hız cezası. 1.0 = ceza yok, 0.5 = yarı hız.
+  // speedMultiplier (boost) ile ÇARPILARAK birleşir, onu ezmez.
+  private float penaltyMultiplier = 1f;
+
+  private Vector2 knockbackVelocity = Vector2.zero;
+
+  [Header("Çarpışma Sıçraması")]
+  [Tooltip("Sıçramanın ne kadar hızlı söneceği. Yüksek = çabuk durur.")]
+  [SerializeField] private float knockbackDamping = 8f;
 
   // Input
   private Keyboard keyboard;
@@ -31,6 +44,10 @@ public class BrushController : MonoBehaviour
   private void Awake()
   {
     keyboard = Keyboard.current;
+  }
+
+  private void Start()
+  {
     CalculateBounds();
   }
 
@@ -40,21 +57,11 @@ public class BrushController : MonoBehaviour
   /// </summary>
   private void CalculateBounds()
   {
-    Camera cam = Camera.main;
-
-    float halfHeight = cam.orthographicSize;
-    float halfWidth = halfHeight * cam.aspect;
-
-    // Üst sınırı TopBar kadar aşağı çek
-    // 60px UI → dünya koordinatına çevir
-    float topBarWorldHeight = (60f / Screen.height) * halfHeight * 2f;
-
-    minX = cam.transform.position.x - halfWidth + borderPadding;
-    maxX = cam.transform.position.x + halfWidth - borderPadding;
-    minY = cam.transform.position.y - halfHeight + borderPadding;
-    maxY = cam.transform.position.y + halfHeight - topBarWorldHeight - borderPadding;
+    Bounds2D area = ArenaBounds.Calculate(Camera.main, topBarRect, borderPadding);
+    minX = area.minX; maxX = area.maxX;
+    minY = area.minY; maxY = area.maxY;
   }
-
+  
   private void Update()
   {
     HandleInput();
@@ -83,28 +90,38 @@ public class BrushController : MonoBehaviour
   /// </summary>
   private void Move()
   {
-    float speed = moveSpeed * speedMultiplier;
+    // Final hız = temel hız × boost çarpanı × ceza çarpanı
+    // Katmanlar birbirini ezmez, çarpım olarak birleşir.
+    float speed = moveSpeed * speedMultiplier * penaltyMultiplier;
     Vector3 nextPosition = transform.position + transform.up * speed * Time.deltaTime;
 
     // Arena sınır kontrolü
     nextPosition.x = Mathf.Clamp(nextPosition.x, minX, maxX);
     nextPosition.y = Mathf.Clamp(nextPosition.y, minY, maxY);
 
-    // Diğer fırçalarla çakışma kontrolü
-    float brushRadius = 0.25f;
-    Collider2D[] hits = Physics2D.OverlapCircleAll(nextPosition, brushRadius, LayerMask.GetMask("Default"));
-
-    foreach (Collider2D hit in hits)
-    {
-      // Kendisi değil ve Brush tag'li ise
-      if (hit.gameObject == gameObject) continue;
-      if (!hit.CompareTag("Brush")) continue;
-
-      // O yöne gitme — pozisyonu güncelleme
-      return;
-    }
-
+    // Normal hareketi uygula.
+    // NOT: Eski "diğer fırçaya değince return" bloğu KALDIRILDI.
+    // Fırçaların ayrılması artık BrushCollision'ın knockback'i ile olur;
+    // eski blok fırçaları kilitliyordu.
     transform.position = nextPosition;
+
+    // Knockback (sıçrama) varsa uygula ve zamanla söndür.
+    if (knockbackVelocity.sqrMagnitude > 0.0001f)
+    {
+      Vector3 knockedPos = transform.position + (Vector3)knockbackVelocity * Time.deltaTime;
+
+      // Sıçrama da arena dışına taşmasın
+      knockedPos.x = Mathf.Clamp(knockedPos.x, minX, maxX);
+      knockedPos.y = Mathf.Clamp(knockedPos.y, minY, maxY);
+      transform.position = knockedPos;
+
+      // Üstel sönümleme — yumuşak yavaşlama
+      knockbackVelocity = Vector2.Lerp(
+          knockbackVelocity,
+          Vector2.zero,
+          knockbackDamping * Time.deltaTime
+      );
+    }
   }
 
   private void Rotate(float direction)
@@ -113,8 +130,33 @@ public class BrushController : MonoBehaviour
   }
 
   public void SetSpeedMultiplier(float multiplier) => speedMultiplier = multiplier;
+
+  /// <summary>
+  /// Hız cezası uygular (örn. çarpışma sonrası 0.5 = yarı hız).
+  /// Boost çarpanından bağımsızdır, onunla çarpılarak birleşir.
+  /// </summary>
+  public void SetPenaltyMultiplier(float multiplier)
+  {
+    penaltyMultiplier = multiplier;
+  }
+
+  /// <summary>
+  /// Hız cezasını kaldırır (çarpanı 1.0'a döndürür).
+  /// Ceza süresi bitince VEYA boost gibi bir durum cezayı iptal
+  /// ettiğinde çağrılır.
+  /// </summary>
+  public void ClearPenalty()
+  {
+    penaltyMultiplier = 1f;
+  }
+
+  /// <summary>
+  /// Şu an ceza uygulanıyor mu? Boost sistemi "cezalı mı" diye
+  /// sorup iptal etmek isteyebilir.
+  /// </summary>
+  public bool HasPenalty => penaltyMultiplier < 1f;
   public Color GetBrushColor() => brushColor;
-  public float GetMoveSpeed() => moveSpeed * speedMultiplier;
+  public float GetMoveSpeed() => moveSpeed * speedMultiplier * penaltyMultiplier;
 
   /// <summary>
   /// Yapay zeka tarafından çağrılır. HandleInput'tan bağımsız çalışır.
@@ -130,4 +172,14 @@ public class BrushController : MonoBehaviour
   /// x = minX, y = maxX, z = minY, w = maxY
   /// </summary>
   public Vector4 GetBounds() => new Vector4(minX, maxX, minY, maxY);
+
+  /// <summary>
+  /// Çarpışma sıçraması ekler. BrushCollision tarafından çağrılır.
+  /// Bu script knockback'i HESAPLAMAZ, sadece uygular ve söndürür.
+  /// </summary>
+  /// <param name="velocity">Sıçrama yönü ve şiddeti (yön * güç)</param>
+  public void AddKnockback(Vector2 velocity)
+  {
+    knockbackVelocity = velocity;
+  }
 }
